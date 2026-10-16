@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { db } from '../lib/db'
+import { supabase } from '../lib/supabase'
 
 export function Login() {
   const [email, setEmail] = useState('')
@@ -12,10 +12,11 @@ export function Login() {
     setBusy(true)
     setErr(null)
     try {
-      await fn()
+      const res = await fn()
+      const error = (res as { error?: { message: string } | null } | undefined)?.error
+      if (error) throw error
     } catch (e) {
-      const msg = (e as { body?: { message?: string } }).body?.message
-      setErr(msg ?? (e as Error).message ?? 'Something went wrong')
+      setErr((e as Error).message ?? 'Something went wrong')
     } finally {
       setBusy(false)
     }
@@ -24,14 +25,15 @@ export function Login() {
   function sendCode(e: FormEvent) {
     e.preventDefault()
     run(async () => {
-      await db.auth.sendMagicCode({ email })
-      setSentTo(email)
+      const res = await supabase.auth.signInWithOtp({ email })
+      if (!res.error) setSentTo(email)
+      return res
     })
   }
 
   function verify(e: FormEvent) {
     e.preventDefault()
-    run(() => db.auth.signInWithMagicCode({ email: sentTo!, code }))
+    run(() => supabase.auth.verifyOtp({ email: sentTo!, token: code.trim(), type: 'email' }))
   }
 
   return (
@@ -83,7 +85,7 @@ export function Login() {
       )}
       <p className="muted small">
         or{' '}
-        <button className="link" onClick={() => run(() => db.auth.signInAsGuest())}>
+        <button className="link" onClick={() => run(() => supabase.auth.signInAnonymously())}>
           try it as a guest
         </button>
       </p>

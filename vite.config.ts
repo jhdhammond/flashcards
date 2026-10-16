@@ -25,7 +25,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // App shell + fonts are precached; data lives in Instant's IndexedDB.
+        // App shell + fonts are precached; data lives in IndexedDB (Dexie).
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
         navigateFallback: '/index.html',
       },

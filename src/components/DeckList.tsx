@@ -1,36 +1,30 @@
 import { useState, type FormEvent } from 'react'
 import { createDeck } from '../lib/actions'
-import { db } from '../lib/db'
 import { href, useNow } from '../lib/hooks'
-import { useNewSeenToday } from '../lib/queries'
+import { useDeckList, useNewSeenToday } from '../lib/queries'
+import { useStore } from '../lib/store'
 import { dueCounts } from '../lib/srs'
 import { Counts } from './Counts'
 
-export function DeckList({ userId }: { userId: string }) {
+export function DeckList() {
+  const store = useStore()
   const now = useNow()
-  const { isLoading, data } = db.useQuery({
-    decks: {
-      $: { where: { ownerId: userId }, order: { createdAt: 'asc' } },
-      cards: { $: { fields: ['due', 'state'] } },
-    },
-  })
-  const newSeen = useNewSeenToday(userId, now)
+  const decks = useDeckList()
+  const newSeen = useNewSeenToday(now)
   const [name, setName] = useState('')
 
-  function add(e: FormEvent) {
+  async function add(e: FormEvent) {
     e.preventDefault()
     if (!name.trim()) return
-    const deckId = createDeck(userId, name.trim())
+    const deckId = await createDeck(store, name.trim())
     setName('')
     location.hash = href.deck(deckId)
   }
 
-  const decks = data?.decks ?? []
-
   return (
     <section>
       <h1 className="display">Decks</h1>
-      {isLoading ? (
+      {!decks ? (
         <p className="muted blink">loading…</p>
       ) : decks.length === 0 ? (
         <p className="muted">No decks yet. Make your first one below.</p>

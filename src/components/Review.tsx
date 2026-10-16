@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { answerCard, previewIntervals } from '../lib/actions'
-import { db, type CardRow, type Note } from '../lib/db'
+import type { CardRow, Note } from '../lib/db'
 import { href, useNow } from '../lib/hooks'
-import { useNewSeenToday } from '../lib/queries'
+import { useDeck, useNewSeenToday } from '../lib/queries'
+import { useStore } from '../lib/store'
 import {
   dueCounts,
   formatInterval,
@@ -32,17 +33,19 @@ function buildQueue(cards: QCard[], newLeft: number, now: number): QCard[] {
   return learning.filter((c) => c.due <= now + LEARN_AHEAD_MS).sort(byDue)
 }
 
-export function Review({ userId, deckId }: { userId: string; deckId: string }) {
+export function Review({ deckId }: { deckId: string }) {
+  const store = useStore()
   const now = useNow(5_000)
-  const { isLoading, data } = db.useQuery({
-    decks: { $: { where: { id: deckId } }, cards: { note: {} } },
-  })
-  const newSeen = useNewSeenToday(userId, now)
+  const data = useDeck(deckId)
+  const newSeen = useNewSeenToday(now)
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [revealedId, setRevealedId] = useState<string | null>(null)
 
-  const deck = data?.decks[0]
-  const cards = useMemo(() => (deck?.cards ?? []) as QCard[], [deck])
+  const deck = data?.deck
+  const cards = useMemo<QCard[]>(
+    () => data?.notes.flatMap((note) => note.cards.map((c) => ({ ...c, note }))) ?? [],
+    [data],
+  )
   const seen = newSeen.get(deckId) ?? 0
   const queue = useMemo(() => buildQueue(cards, NEW_PER_DAY - seen, now), [cards, seen, now])
 
@@ -59,7 +62,7 @@ export function Review({ userId, deckId }: { userId: string; deckId: string }) {
 
   function grade(g: Grade) {
     if (!current) return
-    answerCard(userId, current, g)
+    void answerCard(store, current, g)
     setCurrentId(null)
     setRevealedId(null)
   }
@@ -84,7 +87,7 @@ export function Review({ userId, deckId }: { userId: string; deckId: string }) {
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  if (isLoading) return <p className="muted blink">loading…</p>
+  if (data === undefined) return <p className="muted blink">loading…</p>
   if (!deck) return <p className="muted">Deck not found.</p>
 
   const counts = dueCounts(cards, seen, now)

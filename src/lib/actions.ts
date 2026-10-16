@@ -1,24 +1,32 @@
-import { id, type TransactionChunk } from '@instantdb/react'
 import { clozeOrds } from './cloze'
-import { db, type CardRow, type Note } from './db'
+import { stamp, uuid, type CardRow, type Note } from './db'
 import { newSrsFields, scheduler, toFsrs, fromFsrs, type Grade } from './srs'
+import type { Store } from './store'
 
-// All writes go through db.transact, which applies locally first and queues
-// for the server — so every action here works offline.
+// Every write lands in IndexedDB first (so it works offline), marked dirty,
+// then pokes the sync engine to push it when it can.
 
-export function createDeck(ownerId: string, name: string) {
-  const deckId = id()
-  db.transact(db.tx.decks[deckId].update({ ownerId, name, createdAt: Date.now() }))
-  return deckId
+export async function createDeck({ db, sync }: Store, name: string) {
+  const id = uuid()
+  await db.decks.add({ id, name, createdAt: Date.now(), deleted: false, ...stamp() })
+  sync.schedule()
+  return id
 }
 
-export function renameDeck(deckId: string, name: string) {
-  db.transact(db.tx.decks[deckId].update({ name }))
+export async function renameDeck({ db, sync }: Store, deckId: string, name: string) {
+  await db.decks.update(deckId, { name, ...stamp() })
+  sync.schedule()
 }
 
-export function deleteDeck(deckId: string) {
-  // notes cascade from the deck, cards from notes, reviews from cards
-  db.transact(db.tx.decks[deckId].delete())
+export async function deleteDeck({ db, sync }: Store, deckId: string) {
+  // Soft-delete the deck and everything in it so the deletes sync too.
+  const gone = { deleted: true, ...stamp() }
+  await db.transaction('rw', db.decks, db.notes, db.cards, async () => {
+    await db.decks.update(deckId, gone)
+    await db.notes.where('deckId').equals(deckId).modify(gone)
+    await db.cards.where('deckId').equals(deckId).modify(gone)
+  })
+  sync.schedule()
 }
 
 export type NoteInput = { kind: 'basic' | 'cloze'; front: string; back: string }
@@ -28,60 +36,80 @@ export function ordsFor(input: NoteInput): number[] {
 }
 
 /** Create or update a note, then add/remove its cards to match its ords. */
-export function saveNote(
-  ownerId: string,
+export async function saveNote(
+  { db, sync }: Store,
   deckId: string,
   input: NoteInput,
   existing?: Note & { cards: CardRow[] },
 ) {
-  const noteId = existing?.id ?? id()
+  const noteId = existing?.id ?? uuid()
   const now = Date.now()
-  const txs: TransactionChunk<any, any>[] = [
-    db.tx.notes[noteId]
-      .update({
-        ownerId,
-        kind: input.kind,
-        front: input.front,
-        back: input.back,
-        createdAt: existing?.createdAt ?? now,
-      })
-      .link({ deck: deckId }),
-  ]
-
   const wanted = new Set(ordsFor(input))
   const have = existing?.cards ?? []
   // Switching basic <-> cloze resets the cards since ords change meaning.
   const kindChanged = existing && existing.kind !== input.kind
-  for (const c of have) {
-    if (kindChanged || !wanted.has(c.ord)) txs.push(db.tx.cards[c.id].delete())
-  }
   const kept = new Set(kindChanged ? [] : have.map((c) => c.ord))
-  for (const ord of wanted) {
-    if (kept.has(ord)) continue
-    txs.push(
-      db.tx.cards[id()]
-        .update({ ownerId, ord, ...newSrsFields(now) })
-        .link({ note: noteId, deck: deckId }),
-    )
-  }
-  db.transact(txs)
+
+  await db.transaction('rw', db.notes, db.cards, async () => {
+    await db.notes.put({
+      id: noteId,
+      deckId,
+      kind: input.kind,
+      front: input.front,
+      back: input.back,
+      createdAt: existing?.createdAt ?? now,
+      deleted: false,
+      ...stamp(),
+    })
+    for (const c of have) {
+      if (kindChanged || !wanted.has(c.ord)) {
+        await db.cards.update(c.id, { deleted: true, ...stamp() })
+      }
+    }
+    for (const ord of wanted) {
+      if (kept.has(ord)) continue
+      await db.cards.add({
+        id: uuid(),
+        deckId,
+        noteId,
+        ord,
+        ...newSrsFields(now),
+        deleted: false,
+        ...stamp(),
+      })
+    }
+  })
+  sync.schedule()
   return noteId
 }
 
-export function deleteNote(noteId: string) {
-  db.transact(db.tx.notes[noteId].delete())
+export async function deleteNote({ db, sync }: Store, noteId: string) {
+  const gone = { deleted: true, ...stamp() }
+  await db.transaction('rw', db.notes, db.cards, async () => {
+    await db.notes.update(noteId, gone)
+    await db.cards.where('noteId').equals(noteId).modify(gone)
+  })
+  sync.schedule()
 }
 
 /** Grade a card with FSRS and log the review. */
-export function answerCard(ownerId: string, card: CardRow, grade: Grade) {
+export async function answerCard({ db, sync }: Store, card: CardRow, grade: Grade) {
   const now = new Date()
   const { card: next, log } = scheduler.next(toFsrs(card), now, grade)
-  db.transact([
-    db.tx.cards[card.id].update(fromFsrs(next)),
-    db.tx.reviews[id()]
-      .update({ ownerId, rating: grade, state: log.state, reviewedAt: now.getTime() })
-      .link({ card: card.id }),
-  ])
+  await db.transaction('rw', db.cards, db.reviews, async () => {
+    await db.cards.update(card.id, { ...fromFsrs(next), ...stamp() })
+    await db.reviews.add({
+      id: uuid(),
+      deckId: card.deckId,
+      cardId: card.id,
+      rating: grade,
+      state: log.state,
+      reviewedAt: now.getTime(),
+      deleted: false,
+      ...stamp(),
+    })
+  })
+  sync.schedule()
 }
 
 /** Preview the next due time for each grade (for the button labels). */

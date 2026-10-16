@@ -12,7 +12,9 @@
   "dependencies": {
     "@fontsource/geist-mono": "^5.3.0",
     "@fontsource/pixelify-sans": "^5.3.0",
-    "@instantdb/react": "^1.0.67",
+    "@supabase/supabase-js": "^2.118.0",
+    "dexie": "^4.4.6",
+    "dexie-react-hooks": "^4.4.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "ts-fsrs": "^5.4.2"

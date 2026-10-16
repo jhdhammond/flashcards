@@ -1,16 +1,17 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { ordsFor, saveNote, type NoteInput } from '../lib/actions'
 import { nextOrd } from '../lib/cloze'
-import type { CardRow, Note } from '../lib/db'
+import type { NoteWithCards } from '../lib/queries'
+import { useStore } from '../lib/store'
 
 type Props = {
-  userId: string
   deckId: string
-  existing?: Note & { cards: CardRow[] }
+  existing?: NoteWithCards
   onDone: () => void
 }
 
-export function NoteEditor({ userId, deckId, existing, onDone }: Props) {
+export function NoteEditor({ deckId, existing, onDone }: Props) {
+  const store = useStore()
   const [kind, setKind] = useState<NoteInput['kind']>(existing?.kind ?? 'basic')
   const [front, setFront] = useState(existing?.front ?? '')
   const [back, setBack] = useState(existing?.back ?? '')
@@ -49,7 +50,7 @@ export function NoteEditor({ userId, deckId, existing, onDone }: Props) {
   function submit(e: FormEvent | KeyboardEvent) {
     e.preventDefault()
     if (!valid) return
-    saveNote(userId, deckId, input, existing)
+    void saveNote(store, deckId, input, existing)
     if (existing) onDone()
     else {
       setFront('')
